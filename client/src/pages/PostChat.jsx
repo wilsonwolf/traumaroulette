@@ -1,8 +1,32 @@
+/**
+ * @file PostChat.jsx
+ * @description Post-conversation summary page shown after a chat ends.
+ *
+ * Displays a recap of the completed conversation including:
+ *   - Whether the users became "Friends Forever"
+ *   - Points earned during the conversation (with a detailed breakdown)
+ *   - Conversation statistics (message count, extension count, total points)
+ *   - Navigation to start a new conversation or return to the lobby
+ *
+ * On mount, fetches the user's point log and the conversation details in
+ * parallel, then refreshes the auth user object to reflect updated totals.
+ */
+
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../hooks/useAuth';
 
+/**
+ * Post-chat summary page component.
+ *
+ * Reads `conversationId` from the URL params and loads conversation data +
+ * point history from the API. Filters the point log to only show entries
+ * relevant to this specific conversation.
+ *
+ * @component
+ * @returns {React.ReactElement} The post-chat summary UI.
+ */
 export default function PostChat() {
   const { conversationId } = useParams();
   const navigate = useNavigate();
@@ -11,7 +35,12 @@ export default function PostChat() {
   const [conversation, setConversation] = useState(null);
   const [messageCount, setMessageCount] = useState(0);
 
+  // Fetch conversation data and point history on mount
   useEffect(() => {
+    /**
+     * Loads point data and conversation details in parallel.
+     * Also refreshes the auth user to sync the total_points display.
+     */
     async function load() {
       try {
         const [pData, cData] = await Promise.all([
@@ -21,6 +50,7 @@ export default function PostChat() {
         setPoints(pData);
         setConversation(cData.conversation);
         setMessageCount(cData.messages.length);
+        // Refresh user context so total_points is up-to-date
         refreshUser();
       } catch (err) {
         console.error(err);
@@ -29,9 +59,11 @@ export default function PostChat() {
     load();
   }, [conversationId, refreshUser]);
 
+  // Filter the full point log to only entries from this conversation
   const convPoints = points?.log?.filter(
     l => String(l.conversation_id) === String(conversationId)
   ) || [];
+  // Sum up all points earned in this conversation
   const totalEarned = convPoints.reduce((sum, l) => sum + l.points, 0);
 
   return (

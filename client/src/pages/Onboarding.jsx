@@ -1,32 +1,70 @@
+/**
+ * @file Onboarding.jsx
+ * @description Five-step onboarding wizard for new users.
+ *
+ * Steps:
+ *   0. Account  -- Welcome screen (account already created at this point)
+ *   1. Photo    -- Profile photo upload (required)
+ *   2. Demographics -- Bio, location, gender, age
+ *   3. Trauma   -- Childhood trauma submission + AI assessment by "Dr. Slavenko"
+ *   4. Confirm  -- Summary of all entered data with final confirmation
+ *
+ * After completing all steps, the user's `onboarding_complete` flag is set
+ * server-side and they are redirected to the lobby.
+ */
+
 import { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../api';
 
+/** @constant {string[]} STEPS - Human-readable labels for each onboarding step. */
 const STEPS = ['Account', 'Photo', 'Demographics', 'Trauma', 'Confirm'];
 
+/**
+ * Onboarding wizard component.
+ *
+ * Manages the multi-step form state, per-step validation, photo upload,
+ * demographics submission, trauma AI assessment, and final completion.
+ * The user can navigate forward/backward between steps using Next/Back buttons.
+ *
+ * @component
+ * @returns {React.ReactElement} The onboarding wizard UI.
+ */
 export default function Onboarding() {
   const { user, refreshUser } = useAuth();
   const navigate = useNavigate();
+  /** @type {[number, Function]} Current step index (0-4) */
   const [step, setStep] = useState(0);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Step 2 - Photo
+  // -- Step 1: Photo state --
+  /** Server URL of the uploaded photo (persisted after successful upload) */
   const [photoUrl, setPhotoUrl] = useState(user?.photo_url || '');
+  /** Local object URL for immediate preview before/during upload */
   const [photoPreview, setPhotoPreview] = useState(user?.photo_url || '');
+  /** Ref for the hidden file input so we can trigger it programmatically */
   const fileRef = useRef(null);
 
-  // Step 3 - Demographics
+  // -- Step 2: Demographics state --
   const [bio, setBio] = useState(user?.bio || '');
   const [location, setLocation] = useState(user?.location || '');
   const [gender, setGender] = useState(user?.gender || '');
   const [age, setAge] = useState(user?.age || '');
 
-  // Step 4 - Trauma
+  // -- Step 3: Trauma state --
+  /** The user's raw trauma text input */
   const [trauma, setTrauma] = useState(user?.childhood_trauma || '');
+  /** The AI-generated response from "Dr. Slavenko" */
   const [traumaResponse, setTraumaResponse] = useState(user?.trauma_response || '');
 
+  /**
+   * Handles profile photo file selection and upload.
+   * Creates a local preview URL immediately, then uploads to the server.
+   *
+   * @param {React.ChangeEvent<HTMLInputElement>} e - File input change event.
+   */
   async function handlePhotoUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -44,6 +82,11 @@ export default function Onboarding() {
     }
   }
 
+  /**
+   * Validates and submits demographics data (bio, location, gender, age).
+   * On success, advances to step 3 (Trauma). Validation is done client-side
+   * before making the API call.
+   */
   async function handleDemographics() {
     if (!bio.trim()) return setError('Bio is required');
     if (!location.trim()) return setError('Location is required');
@@ -62,6 +105,11 @@ export default function Onboarding() {
     }
   }
 
+  /**
+   * Submits the user's childhood trauma text to the AI assessment endpoint.
+   * The server returns a "Dr. Slavenko" personality-driven response that is
+   * displayed to the user and must be received before they can advance.
+   */
   async function handleTraumaSubmit() {
     if (!trauma.trim()) return setError('Please share something');
     setLoading(true);
@@ -76,6 +124,10 @@ export default function Onboarding() {
     }
   }
 
+  /**
+   * Marks onboarding as complete on the server, refreshes the user object
+   * (so `onboarding_complete` is true), and navigates to the lobby.
+   */
   async function handleComplete() {
     setLoading(true);
     try {
@@ -89,6 +141,17 @@ export default function Onboarding() {
     }
   }
 
+  /**
+   * Determines whether the "Next" button should be enabled for the current step.
+   * Each step has its own validation criteria:
+   *   - Step 0: Always true (welcome screen)
+   *   - Step 1: Photo must be uploaded
+   *   - Step 2: All demographic fields must be filled and age in range
+   *   - Step 3: AI response must have been received
+   *   - Step 4: Always true (confirmation)
+   *
+   * @returns {boolean} Whether the user can proceed from the current step.
+   */
   function canAdvance() {
     switch (step) {
       case 0: return true; // Already registered
@@ -100,6 +163,11 @@ export default function Onboarding() {
     }
   }
 
+  /**
+   * Handles the "Next" button click. Step 2 triggers an API call via
+   * `handleDemographics()` (which advances on success). Step 4 triggers
+   * `handleComplete()`. All other steps simply increment the step counter.
+   */
   function nextStep() {
     setError('');
     if (step === 2) return handleDemographics();

@@ -1,6 +1,25 @@
+/**
+ * @file Lobby.jsx
+ * @description Main lobby page -- the home screen for authenticated users.
+ *
+ * Displays the user's point total and provides the primary "Find Someone"
+ * call-to-action that navigates to the matching queue. Also offers navigation
+ * to the profile page and a logout button.
+ */
+
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 
+/**
+ * Lobby page component.
+ *
+ * A simple landing area after login/onboarding that serves as the main hub.
+ * The user can start a new conversation (Find Someone), view their profile,
+ * or log out.
+ *
+ * @component
+ * @returns {React.ReactElement} The lobby UI.
+ */
 export default function Lobby() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();

@@ -1,3 +1,38 @@
+/**
+ * @file Chat.jsx
+ * @description Main real-time chat page -- the core experience of TraumaChat.
+ *
+ * This is the most complex component in the application. It orchestrates:
+ *   - Real-time messaging via Socket.io (text + voice notes)
+ *   - A countdown timer driven by server-provided end timestamps
+ *   - Voice recording through the MediaRecorder API
+ *   - Multiple modal flows: extension voting, photo exchange, friends forever
+ *   - Partner connection/disconnection handling
+ *   - Post-chat navigation
+ *
+ * Socket event flow:
+ *   Server -> Client:
+ *     'new-message'            -> Append message to chat
+ *     'timer-start'            -> Start/restart the countdown timer
+ *     'timer-expired'          -> Show the extension vote modal
+ *     'extension-prompt'       -> Same as timer-expired (alternative event)
+ *     'extension-result'       -> Handle the resolved vote outcome
+ *     'photo-exchange-reveal'  -> Show both photos for rating
+ *     'friends-forever-confirmed' -> Show celebration modal
+ *     'conversation-closed'    -> Mark chat as ended
+ *     'partner-disconnected'   -> Show disconnection notice
+ *     'vote-received'          -> Show "waiting for partner" state
+ *     'rejoin-conversation'    -> Restore room/partner on reconnect
+ *
+ *   Client -> Server:
+ *     'join-room'              -> Join the socket room for this conversation
+ *     'send-message'           -> Send a text message
+ *     'send-voice-note'        -> Send a voice note (after uploading the file)
+ *     'extension-vote'         -> Submit the user's extension vote
+ *     'photo-exchange-submit'  -> Submit the user's photo for exchange
+ *     'rate-photo'             -> Submit a star rating for the partner's photo
+ */
+
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
@@ -9,6 +44,16 @@ import ExtensionModal from '../components/ExtensionModal';
 import PhotoExchangeModal from '../components/PhotoExchangeModal';
 import FriendsForeverModal from '../components/FriendsForeverModal';
 
+/**
+ * Chat page component.
+ *
+ * Reads the `conversationId` from the URL params and the `roomId`/`partner`
+ * from React Router location state (passed by the Matching page). Manages
+ * all real-time chat state including messages, timer, modals, and voice recording.
+ *
+ * @component
+ * @returns {React.ReactElement} The full chat interface.
+ */
 export default function Chat() {
   const { conversationId } = useParams();
   const location = useLocation();
@@ -18,48 +63,100 @@ export default function Chat() {
   const { secondsLeft, isWarning, startTimer, stopTimer } = useTimer();
   const { isRecording, duration, startRecording, stopRecording, cancelRecording } = useVoiceRecorder();
 
+  // ---------------------------------------------------------------------------
+  // State: messages and input
+  // ---------------------------------------------------------------------------
+  /** @type {[Array<Object>, Function]} Array of message objects from the server */
   const [messages, setMessages] = useState([]);
+  /** @type {[string, Function]} Current text input value */
   const [input, setInput] = useState('');
+
+  // ---------------------------------------------------------------------------
+  // State: partner and room (initialised from route state, updated on rejoin)
+  // ---------------------------------------------------------------------------
   const [partner, setPartner] = useState(location.state?.partner || null);
   const [roomId, setRoomId] = useState(location.state?.roomId || null);
+
+  // ---------------------------------------------------------------------------
+  // State: modal visibility and feature flags
+  // ---------------------------------------------------------------------------
+  /** Whether the conversation is in unlimited "friends forever" mode */
   const [isFriendsForever, setIsFriendsForever] = useState(false);
+  /** Whether to show the extension vote modal */
   const [showExtension, setShowExtension] = useState(false);
+  /** Whether to show the photo exchange upload modal */
   const [showPhotoExchange, setShowPhotoExchange] = useState(false);
+  /** Photos data for the reveal stage of photo exchange */
   const [photoExchangeData, setPhotoExchangeData] = useState(null);
+  /** Whether to show the photo rating UI */
   const [showRating, setShowRating] = useState(false);
+  /** Whether to show the friends forever celebration modal */
   const [showFriendsForever, setShowFriendsForever] = useState(false);
+  /** Whether we are waiting for the partner's extension vote */
   const [extensionWaiting, setExtensionWaiting] = useState(false);
+  /** Whether the conversation has been closed (disables input) */
   const [chatClosed, setChatClosed] = useState(false);
 
+  /** Ref used as a scroll anchor at the bottom of the messages list */
   const messagesEndRef = useRef(null);
 
-  // Auto-scroll
+  // ---------------------------------------------------------------------------
+  // Effects
+  // ---------------------------------------------------------------------------
+
+  // Auto-scroll to bottom whenever a new message is added
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Join room
+  // Join the socket room when the socket and roomId are available
   useEffect(() => {
     if (socket && roomId) {
       socket.emit('join-room', roomId);
     }
   }, [socket, roomId]);
 
-  // Socket events
+  // ---------------------------------------------------------------------------
+  // Socket event handlers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handles incoming messages. Only appends the message if it belongs to
+   * the current conversation (guards against stale events from previous chats).
+   * @param {Object} msg - The message object from the server.
+   */
   const handleNewMessage = useCallback((msg) => {
     if (String(msg.conversation_id) === String(conversationId)) {
       setMessages(prev => [...prev, msg]);
     }
   }, [conversationId]);
 
+  /**
+   * Handles the server's timer-start event by starting the client-side countdown.
+   * @param {{ endTime: string }} param0 - Absolute ISO timestamp when the timer expires.
+   */
   const handleTimerStart = useCallback(({ endTime }) => {
     startTimer(endTime);
   }, [startTimer]);
 
+  /**
+   * Handles timer expiration by showing the extension vote modal.
+   * Also used for the 'extension-prompt' event (same behavior).
+   */
   const handleTimerExpired = useCallback(() => {
     setShowExtension(true);
   }, []);
 
+  /**
+   * Processes the server's resolved extension vote outcome.
+   *
+   * Possible results:
+   *   - 'photo_exchange': both voted to extend -- show photo upload modal
+   *   - 'friends_forever': both voted friends forever -- show celebration
+   *   - 'closed': at least one user voted to leave -- end the chat
+   *
+   * @param {{ result: 'photo_exchange'|'friends_forever'|'closed' }} param0
+   */
   const handleExtensionResult = useCallback(({ result }) => {
     setShowExtension(false);
     setExtensionWaiting(false);
@@ -75,20 +172,35 @@ export default function Chat() {
     }
   }, [stopTimer]);
 
+  /**
+   * Handles the photo exchange reveal event. Receives both users' photo data
+   * and transitions the modal to rating mode.
+   * @param {{ photos: Array<{ userId: number, photoUrl: string }> }} param0
+   */
   const handlePhotoReveal = useCallback(({ photos }) => {
     setPhotoExchangeData(photos);
     setShowRating(true);
   }, []);
 
+  /**
+   * Handles the friends-forever confirmation event (triggered when both users
+   * vote friends_forever via a different code path than extension-result).
+   */
   const handleFriendsForeverConfirmed = useCallback(() => {
     setShowFriendsForever(true);
     setIsFriendsForever(true);
     stopTimer();
   }, [stopTimer]);
 
+  /**
+   * Handles the conversation-closed event. Stops the timer and appends a
+   * system message explaining the closure reason.
+   * @param {{ reason?: string }} param0 - Optional reason text from the server.
+   */
   const handleConversationClosed = useCallback(({ reason }) => {
     setChatClosed(true);
     stopTimer();
+    // Inject a client-side system message to inform the user
     setMessages(prev => [...prev, {
       id: Date.now(),
       message_type: 'system',
@@ -98,6 +210,10 @@ export default function Chat() {
     }]);
   }, [stopTimer]);
 
+  /**
+   * Handles partner disconnection by showing a system message. The server
+   * allows a 30-second window for reconnection before closing.
+   */
   const handlePartnerDisconnected = useCallback(() => {
     setMessages(prev => [...prev, {
       id: Date.now(),
@@ -108,19 +224,30 @@ export default function Chat() {
     }]);
   }, []);
 
+  /**
+   * Handles the notification that the partner has submitted their vote.
+   * Transitions the extension modal to a "waiting" state.
+   */
   const handleVoteReceived = useCallback(() => {
     setExtensionWaiting(true);
   }, []);
 
+  /**
+   * Handles conversation rejoin after a reconnection. Restores the roomId
+   * and partner info if they were lost during the disconnection.
+   * @param {{ roomId: string, partnerId: number }} data
+   */
   const handleRejoin = useCallback((data) => {
     setRoomId(data.roomId);
+    // Only set partner if not already known (preserve richer data from initial match)
     setPartner(prev => prev || { id: data.partnerId });
   }, []);
 
+  // -- Register all socket event listeners --
   useSocketEvent(socket, 'new-message', handleNewMessage);
   useSocketEvent(socket, 'timer-start', handleTimerStart);
   useSocketEvent(socket, 'timer-expired', handleTimerExpired);
-  useSocketEvent(socket, 'extension-prompt', handleTimerExpired);
+  useSocketEvent(socket, 'extension-prompt', handleTimerExpired); // Alias for timer-expired
   useSocketEvent(socket, 'extension-result', handleExtensionResult);
   useSocketEvent(socket, 'photo-exchange-reveal', handlePhotoReveal);
   useSocketEvent(socket, 'friends-forever-confirmed', handleFriendsForeverConfirmed);
@@ -129,6 +256,15 @@ export default function Chat() {
   useSocketEvent(socket, 'vote-received', handleVoteReceived);
   useSocketEvent(socket, 'rejoin-conversation', handleRejoin);
 
+  // ---------------------------------------------------------------------------
+  // User action handlers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Sends a text message via socket. Guards against empty input, missing
+   * socket, or a closed chat.
+   * @param {React.FormEvent<HTMLFormElement>} e - The form submit event.
+   */
   function sendMessage(e) {
     e.preventDefault();
     if (!input.trim() || !socket || chatClosed) return;
@@ -136,6 +272,10 @@ export default function Chat() {
     setInput('');
   }
 
+  /**
+   * Stops the voice recording, uploads the resulting blob to the server,
+   * and emits a voice note message via socket with the returned URL.
+   */
   async function handleVoiceStop() {
     const result = await stopRecording();
     if (!result) return;
@@ -153,11 +293,20 @@ export default function Chat() {
     }
   }
 
+  /**
+   * Submits the user's extension vote and transitions to the waiting state.
+   * @param {'extend'|'friends_forever'|'leave'} vote - The user's chosen option.
+   */
   function handleExtensionVote(vote) {
     socket.emit('extension-vote', { conversationId: parseInt(conversationId), vote });
     setExtensionWaiting(true);
   }
 
+  /**
+   * Uploads the user's photo for the photo exchange and submits the URL
+   * to the server via socket.
+   * @param {File} file - The photo file selected by the user.
+   */
   async function handlePhotoSubmit(file) {
     const formData = new FormData();
     formData.append('photo', file);
@@ -168,6 +317,11 @@ export default function Chat() {
     });
   }
 
+  /**
+   * Submits the user's star rating for the partner's photo and closes
+   * all photo exchange modals.
+   * @param {number} score - The 1-5 star rating.
+   */
   function handleRatingSubmit(score) {
     socket.emit('rate-photo', { conversationId: parseInt(conversationId), score });
     setShowRating(false);
@@ -175,6 +329,15 @@ export default function Chat() {
     setPhotoExchangeData(null);
   }
 
+  // ---------------------------------------------------------------------------
+  // Display helpers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Formats a number of seconds into a "M:SS" countdown string.
+   * @param {number|null} seconds - Seconds remaining, or null for no active timer.
+   * @returns {string} Formatted time string (e.g. "2:45") or "--:--" if null.
+   */
   function formatTime(seconds) {
     if (seconds === null) return '--:--';
     const m = Math.floor(seconds / 60);
@@ -182,14 +345,24 @@ export default function Chat() {
     return `${m}:${String(s).padStart(2, '0')}`;
   }
 
+  /**
+   * Formats an ISO timestamp into a short "HH:MM" time string for message display.
+   * @param {string} ts - ISO 8601 timestamp.
+   * @returns {string} Locale-formatted time (e.g. "14:32").
+   */
   function formatMsgTime(ts) {
     return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
   return (
     <div className="chat-page">
+      {/* -- Header: partner info + timer -- */}
       <div className="chat-header">
         <div className="partner-avatar">
+          {/* Show partner photo or first letter of their name as fallback */}
           {partner?.photo_url
             ? <img src={partner.photo_url} alt="" style={{width:'100%',height:'100%',borderRadius:'50%',objectFit:'cover'}} />
             : (partner?.display_name?.[0] || '?')
@@ -201,6 +374,7 @@ export default function Chat() {
             {chatClosed ? 'Disconnected' : isFriendsForever ? 'Friends Forever' : 'Connected'}
           </div>
         </div>
+        {/* Timer display: "FOREVER" when friends, countdown when timed, hidden otherwise */}
         {isFriendsForever ? (
           <div className="timer-display friends">FOREVER</div>
         ) : secondsLeft !== null ? (
@@ -210,15 +384,18 @@ export default function Chat() {
         ) : null}
       </div>
 
+      {/* -- Messages list -- */}
       <div className="messages-container">
         {messages.map(msg => (
           <div
             key={msg.id}
             className={`message-bubble ${
+              // Three bubble styles: system (centered), sent (right), received (left)
               msg.message_type === 'system' ? 'system' :
               msg.sender_id === user.id ? 'sent' : 'received'
             }`}
           >
+            {/* Voice messages render an audio player; text/system messages render content */}
             {msg.message_type === 'voice' ? (
               <div className="voice-note">
                 <audio controls src={msg.voice_url} style={{height:32,width:'100%'}} />
@@ -227,17 +404,21 @@ export default function Chat() {
             ) : (
               <div>{msg.content}</div>
             )}
+            {/* Timestamp is hidden for system messages */}
             {msg.message_type !== 'system' && (
               <div className="message-time">{formatMsgTime(msg.created_at)}</div>
             )}
           </div>
         ))}
+        {/* Invisible anchor element for auto-scrolling to bottom */}
         <div ref={messagesEndRef} />
       </div>
 
+      {/* -- Input area: text input + voice recording (hidden when chat is closed) -- */}
       {!chatClosed && (
         <div className="chat-input-area">
           {isRecording ? (
+            /* Voice recording UI: shows elapsed duration, cancel + stop buttons */
             <>
               <div className="recording-indicator">
                 <span>Recording: {duration}s</span>
@@ -248,6 +429,7 @@ export default function Chat() {
               </button>
             </>
           ) : (
+            /* Default input UI: mic button + text input + send button */
             <>
               <button className="voice-btn" onMouseDown={startRecording}>
                 Mic
@@ -267,6 +449,7 @@ export default function Chat() {
         </div>
       )}
 
+      {/* -- Post-close navigation bar -- */}
       {chatClosed && (
         <div style={{padding:16,textAlign:'center',background:'white'}}>
           <button className="btn-primary" onClick={() => navigate(`/postchat/${conversationId}`)}>
@@ -278,10 +461,14 @@ export default function Chat() {
         </div>
       )}
 
+      {/* -- Modal layer: only one modal is shown at a time -- */}
+
+      {/* Extension vote modal (user has not voted yet) */}
       {showExtension && !extensionWaiting && (
         <ExtensionModal onVote={handleExtensionVote} />
       )}
 
+      {/* Extension waiting modal (user voted, waiting for partner) */}
       {showExtension && extensionWaiting && (
         <div className="modal-overlay">
           <div className="modal">
@@ -291,6 +478,7 @@ export default function Chat() {
         </div>
       )}
 
+      {/* Photo exchange: upload mode (no photos revealed yet) */}
       {showPhotoExchange && !photoExchangeData && !showRating && (
         <PhotoExchangeModal
           onSubmit={handlePhotoSubmit}
@@ -299,6 +487,7 @@ export default function Chat() {
         />
       )}
 
+      {/* Photo exchange: rating mode (both photos revealed) */}
       {showRating && photoExchangeData && (
         <PhotoExchangeModal
           onSubmit={null}
@@ -308,6 +497,7 @@ export default function Chat() {
         />
       )}
 
+      {/* Friends forever celebration modal */}
       {showFriendsForever && (
         <FriendsForeverModal onClose={() => setShowFriendsForever(false)} />
       )}

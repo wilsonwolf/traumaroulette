@@ -1,11 +1,38 @@
+/**
+ * @file Conversation history REST routes.
+ *
+ * Provides read-only access to a user's past and current conversations,
+ * including partner metadata and full message history.
+ *
+ * Routes:
+ *   GET /api/conversations      -- List the authenticated user's conversations.
+ *   GET /api/conversations/:id  -- Get a single conversation with messages.
+ *
+ * @module server/routes/conversations
+ */
+
 const express = require('express');
 const { getDb } = require('../db/init');
 const { requireAuth } = require('../middleware/session');
 
 const router = express.Router();
 
+/**
+ * GET /
+ *
+ * Returns the 50 most recent conversations for the authenticated user,
+ * ordered newest-first.  Each row includes computed partner metadata
+ * (name, photo, ID) derived via CASE expressions so the client always
+ * sees the "other" user's info regardless of whether the authenticated
+ * user is user1 or user2 in the conversations table.
+ *
+ * @returns {{ conversations: Object[] }} Array of conversation rows with partner info.
+ */
 router.get('/', requireAuth, (req, res) => {
   const db = getDb();
+  // The CASE expressions resolve the "other" user's details.
+  // req.userId is bound five times because it appears in three CASE
+  // conditions and the WHERE clause (which checks both user columns).
   const conversations = db.prepare(`
     SELECT c.*,
       CASE WHEN c.user1_id = ? THEN u2.display_name ELSE u1.display_name END as partner_name,
@@ -21,8 +48,19 @@ router.get('/', requireAuth, (req, res) => {
   res.json({ conversations });
 });
 
+/**
+ * GET /:id
+ *
+ * Returns a single conversation and its full message history.
+ * The query enforces that the authenticated user is a participant
+ * (either user1 or user2) to prevent unauthorized access.
+ *
+ * @param {string} id - Conversation database ID (route parameter).
+ * @returns {{ conversation: Object, messages: Object[] }}
+ */
 router.get('/:id', requireAuth, (req, res) => {
   const db = getDb();
+  // Ensure the requesting user is a participant in this conversation.
   const conv = db.prepare('SELECT * FROM conversations WHERE id = ? AND (user1_id = ? OR user2_id = ?)').get(req.params.id, req.userId, req.userId);
   if (!conv) return res.status(404).json({ error: 'Conversation not found' });
 

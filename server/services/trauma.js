@@ -1,3 +1,23 @@
+/**
+ * @file Comedic "trauma therapist" response generator.
+ *
+ * During onboarding, users describe their childhood trauma.  This module
+ * analyses the text for keyword matches and returns a randomly selected
+ * humorous response in the voice of an Eastern-European therapist.
+ *
+ * The response categories are:
+ *   parents, abandonment, school, siblings, poverty, emotional, nothing
+ * plus a catch-all "default" bucket.
+ *
+ * @module server/services/trauma
+ */
+
+/**
+ * Categorised response pools.
+ * Each key corresponds to a trauma category; each value is an array
+ * of possible therapist responses for that category.
+ * @type {Object.<string, string[]>}
+ */
 const RESPONSES = {
   parents: [
     "Ah yes, parents. In my country we say: the apple does not fall far from tree, but sometimes tree is on fire. You will be fine. Probably.",
@@ -43,6 +63,17 @@ const RESPONSES = {
   ],
 };
 
+/**
+ * Keyword-to-category mapping.
+ *
+ * Each entry maps a response category key to an array of lowercase
+ * substrings.  The user's input is scanned against these patterns in
+ * order; the first match wins.  Ordering matters -- more specific
+ * categories (e.g. "parents") are checked before broader ones
+ * (e.g. "emotional").
+ *
+ * @type {Array<{ key: string, patterns: string[] }>}
+ */
 const KEYWORDS = [
   { key: 'parents', patterns: ['parent', 'mom', 'dad', 'mother', 'father', 'mama', 'papa'] },
   { key: 'abandonment', patterns: ['abandon', 'left me', 'left us', 'walked out', 'disappeared', 'alone', 'lonely'] },
@@ -53,9 +84,24 @@ const KEYWORDS = [
   { key: 'nothing', patterns: ['nothing', 'none', 'fine', 'normal', 'no trauma', 'good childhood', "don't have", "didn't have", 'n/a'] },
 ];
 
+/**
+ * Analyses the user's trauma description and returns a randomly
+ * selected comedic therapist response from the matching category.
+ *
+ * Algorithm:
+ *   1. Lowercase the input.
+ *   2. Iterate through KEYWORDS in order; for each category, check
+ *      if any pattern substring is present in the input.
+ *   3. On the first match, pick a random response from that category.
+ *   4. If no category matches, fall back to the "default" pool.
+ *
+ * @param {string} trauma - The user's free-text trauma description.
+ * @returns {string} A humorous therapist response string.
+ */
 function getTraumaResponse(trauma) {
   const lower = trauma.toLowerCase();
 
+  // First-match-wins scan through all keyword categories.
   for (const { key, patterns } of KEYWORDS) {
     for (const pattern of patterns) {
       if (lower.includes(pattern)) {
@@ -65,6 +111,7 @@ function getTraumaResponse(trauma) {
     }
   }
 
+  // No keyword matched -- use the generic default pool.
   const defaults = RESPONSES.default;
   return defaults[Math.floor(Math.random() * defaults.length)];
 }

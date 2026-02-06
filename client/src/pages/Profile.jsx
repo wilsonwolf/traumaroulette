@@ -1,8 +1,35 @@
+/**
+ * @file Profile.jsx
+ * @description User profile page showing personal info, points history,
+ * conversation history, and the global leaderboard.
+ *
+ * On mount, fetches three datasets in parallel:
+ *   1. Points -- the user's point total and log history
+ *   2. Conversations -- list of past conversations with partner names
+ *   3. Leaderboard -- top users by total points
+ *
+ * The page is divided into four cards:
+ *   - Profile header (photo, name, bio, demographics)
+ *   - Points history (last 15 entries)
+ *   - Conversation history (partner names, extension counts, status)
+ *   - Global leaderboard (ranked by total points)
+ */
+
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../api';
 
+/**
+ * Profile page component.
+ *
+ * Displays the authenticated user's full profile, points breakdown,
+ * conversation history, and the global leaderboard. All data is fetched
+ * in a single parallel batch on mount.
+ *
+ * @component
+ * @returns {React.ReactElement} The profile page UI.
+ */
 export default function Profile() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -10,7 +37,12 @@ export default function Profile() {
   const [conversations, setConversations] = useState([]);
   const [leaderboard, setLeaderboard] = useState([]);
 
+  // Fetch all profile data in parallel on mount
   useEffect(() => {
+    /**
+     * Loads points, conversations, and leaderboard data concurrently.
+     * Each dataset is stored in its own state variable for independent rendering.
+     */
     async function load() {
       try {
         const [pData, cData, lData] = await Promise.all([
